@@ -5,7 +5,6 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
@@ -42,15 +41,6 @@ const SearchHistory = mongoose.model('SearchHistory', searchHistorySchema);
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-// Email transporter
-const transporter = nodemailer.createTransporter({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -183,19 +173,10 @@ app.post('/auth/forgot-username', async (req, res) => {
       });
     }
 
-    // Send username via email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: 'Your Script Kiddos Username',
-      text: `Your username is: ${user.username}`
-    };
-
-    await transporter.sendMail(mailOptions);
-
     res.json({
       success: true,
-      message: 'Username sent to your email'
+      message: 'Username retrieved successfully',
+      username: user.username
     });
   } catch (error) {
     console.error('Forgot username error:', error);
@@ -205,7 +186,7 @@ app.post('/auth/forgot-username', async (req, res) => {
 
 app.post('/auth/forgot-password', async (req, res) => {
   try {
-    const { username, email } = req.body;
+    const { username, email, newPassword } = req.body;
 
     const user = await User.findOne({ username, email });
     if (!user) {
@@ -215,26 +196,16 @@ app.post('/auth/forgot-password', async (req, res) => {
       });
     }
 
-    // Generate reset token
-    const resetToken = jwt.sign(
-      { userId: user._id },
-      JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-
-    // Send reset email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: 'Password Reset - Script Kiddos',
-      text: `Click this link to reset your password: ${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`
-    };
-
-    await transporter.sendMail(mailOptions);
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    
+    // Update password
+    user.password = hashedPassword;
+    await user.save();
 
     res.json({
       success: true,
-      message: 'Password reset instructions sent to your email'
+      message: 'Password updated successfully'
     });
   } catch (error) {
     console.error('Forgot password error:', error);
