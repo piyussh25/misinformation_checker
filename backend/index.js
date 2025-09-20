@@ -21,6 +21,7 @@ const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -57,6 +58,20 @@ const authenticateToken = (req, res, next) => {
     req.user = user;
     next();
   });
+};
+
+// Middleware to check admin role
+const requireAdmin = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    req.admin = user;
+    next();
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
 };
 
 // Authentication Routes
@@ -113,7 +128,43 @@ app.post('/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    // Find user by username or email
+    // Check for admin login
+    if (username === 'piyush' && password === 'piyush25') {
+      // Create or find admin user
+      let adminUser = await User.findOne({ username: 'piyush' });
+      if (!adminUser) {
+        const hashedPassword = await bcrypt.hash('piyush25', 10);
+        adminUser = new User({
+          username: 'piyush',
+          email: 'admin@scriptkiddos.com',
+          password: hashedPassword,
+          role: 'admin'
+        });
+        await adminUser.save();
+      }
+
+      // Generate JWT token
+      const token = jwt.sign(
+        { userId: adminUser._id, username: adminUser.username, role: 'admin' },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      return res.json({
+        success: true,
+        message: 'Admin login successful',
+        user: {
+          id: adminUser._id,
+          username: adminUser.username,
+          email: adminUser.email,
+          role: 'admin',
+          createdAt: adminUser.createdAt
+        },
+        token
+      });
+    }
+
+    // Regular user login
     const user = await User.findOne({ 
       $or: [{ username }, { email: username }] 
     });
@@ -136,7 +187,7 @@ app.post('/auth/login', async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user._id, username: user.username },
+      { userId: user._id, username: user.username, role: user.role },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -148,6 +199,7 @@ app.post('/auth/login', async (req, res) => {
         id: user._id,
         username: user.username,
         email: user.email,
+        role: user.role,
         createdAt: user.createdAt
       },
       token
@@ -234,6 +286,96 @@ app.delete('/api/search-history', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Clear history error:', error);
     res.status(500).json({ success: false, message: 'Failed to clear search history' });
+  }
+});
+
+// Admin Routes
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const users = await User.find({ role: 'user' })
+      .select('-password')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      users
+    });
+  } catch (error) {
+    console.error('Admin users error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch users' });
+  }
+});
+
+app.get('/api/admin/user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).select('-password');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    console.error('Admin user details error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch user details' });
+  }
+});
+
+app.get('/api/admin/search-history/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const history = await SearchHistory.find({ userId: req.params.userId })
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    res.json({
+      success: true,
+      history
+    });
+  } catch (error) {
+    console.error('Admin search history error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch search history' });
+  }
+});
+
+app.get('/api/admin/all-search-history', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const history = await SearchHistory.find()
+      .populate('userId', 'username email')
+      .sort({ createdAt: -1 })
+      .limit(200);
+
+    res.json({
+      success: true,
+      history
+    });
+  } catch (error) {
+    console.error('Admin all search history error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch all search history' });
+  }
+});
+
+app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments({ role: 'user' });
+    const totalSearches = await SearchHistory.countDocuments();
+    const recentUsers = await User.find({ role: 'user' })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('username email createdAt');
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers,
+        totalSearches,
+        recentUsers
+      }
+    });
+  } catch (error) {
+    console.error('Admin stats error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch stats' });
   }
 });
 
